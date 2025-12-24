@@ -32,12 +32,13 @@ def test_dispatcher_listing_page():
     followed_links = result["listing_page"]["links"]
     assert len(followed_links) == 2  # Two links in home.html
 
-    # Each followed link should have title and author
-    for item in followed_links:
-        assert "title" in item
-        assert "author" in item
-        assert item["title"] == ["Sample Article Title"]
-        assert item["author"] == ["John Doe"]
+    # First link (link.html)
+    assert followed_links[0]["title"] == ["Sample Article Title"]
+    assert followed_links[0]["author"] == ["John Doe"]
+
+    # Second link (link2.html)
+    assert followed_links[1]["title"] == ["Second Article Title"]
+    assert followed_links[1]["author"] == ["Jane Smith"]
 
 
 def test_dispatcher_rss_feed():
@@ -81,11 +82,13 @@ def test_dispatcher_rss_with_follow():
     followed_links = result["rss_with_follow"]["link"]
     assert len(followed_links) == 3  # Three items in the RSS feed
 
-    # First two items link to link.html (should have same content)
+    # First item links to link.html
     assert followed_links[0]["title"] == ["Sample Article Title"]
     assert followed_links[0]["author"] == ["John Doe"]
-    assert followed_links[1]["title"] == ["Sample Article Title"]
-    assert followed_links[1]["author"] == ["John Doe"]
+
+    # Second item links to link2.html
+    assert followed_links[1]["title"] == ["Second Article Title"]
+    assert followed_links[1]["author"] == ["Jane Smith"]
 
     # Third item links to home.html (different content)
     assert followed_links[2]["title"] == ["Test Heading"]

@@ -17,7 +17,7 @@
 
     <item>
       <title>Second Article</title>
-      <link>http://localhost:8765/link.html</link>
+      <link>http://localhost:8765/link2.html</link>
       <description>This is the second article in the feed</description>
       <pubDate>Mon, 15 Jan 2024 11:00:00 GMT</pubDate>
       <author>Jane Smith</author>
