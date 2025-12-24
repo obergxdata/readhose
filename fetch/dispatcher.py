@@ -12,8 +12,7 @@ logger = logging.getLogger(__name__)
 class Dispatcher:
     """Dispatcher for fetching data from multiple sources defined in a YAML config.
 
-    Supports recursive fetching - sources can specify follow=true to fetch
-    linked pages using the same configuration structure.
+    Batches all requests by type (HTML/RSS) and executes them in parallel.
     """
 
     def __init__(self, source: str, mthred: bool = False, max_workers: Optional[int] = None, timeout: float = 30.0):
@@ -44,100 +43,49 @@ class Dispatcher:
 
         return config
 
-    def run_fetchers(self, location: str, fetch_type: str, fields: List[Dict[str, Any]], base_url: Optional[str] = None) -> Dict[str, Any]:
-        """Recursively fetch data from a location.
-
-        This function handles both HTML and RSS fetching, and recursively
-        follows links if any field has follow=true.
+    def _package_jobs(self, urls: List[str], fields: List[Dict], job_type: str) -> List:
+        """Package URLs and fields into jobs.
 
         Args:
-            location: URL to fetch
-            fetch_type: 'html' or 'rss'
+            urls: List of URLs to fetch
             fields: List of field configurations
-            base_url: Base URL for resolving relative URLs
+            job_type: Type of job ('html' or 'rss')
 
         Returns:
-            Dictionary with extracted field data
+            List of (url, field_selectors) tuples
         """
-        # Build field selectors and identify follow fields
-        field_selectors = {}
-        follow_field = None
+        field_selectors = {field['name']: field['selector'] for field in fields}
+        return [(url, field_selectors) for url in urls]
 
-        for field in fields:
-            field_name = field['name']
-            selector = field['selector']
-            field_selectors[field_name] = selector
+    def _execute_jobs(self, jobs: List, job_type: str) -> List[Any]:
+        """Execute a batch of jobs.
 
-            if field.get('follow', False):
-                if follow_field:
-                    raise ValueError("Only one field can have follow=true per source")
-                follow_field = field
+        Args:
+            jobs: List of (url, field_selectors) tuples
+            job_type: Type of job ('html' or 'rss')
 
-        # Fetch data based on type
-        if fetch_type == 'html':
+        Returns:
+            List of fetched data (in same order as jobs)
+        """
+        if not jobs:
+            return []
+
+        # Create appropriate fetcher
+        if job_type == 'html':
             fetcher = HTTPFetch(max_workers=self.max_workers, timeout=self.timeout)
-            fetcher.add_source(url=location, fields=field_selectors)
-            results = fetcher.parse(mthred=self.mthred)
-            data = results[0] if results else {}
-
-        elif fetch_type == 'rss':
+        else:  # rss
             fetcher = RSSFetch(max_workers=self.max_workers, timeout=self.timeout)
-            # For RSS, the selector is the field name in the RSS feed
-            field_names = list(field_selectors.values())
-            fetcher.add_source(url=location, fields=field_names)
-            results = fetcher.parse(mthred=self.mthred)
-            data = results[0] if results else []
 
-        else:
-            raise ValueError(f"Unsupported fetch type: {fetch_type}")
+        # Add sources
+        for url, field_selectors in jobs:
+            if job_type == 'html':
+                fetcher.add_source(url=url, fields=field_selectors)
+            else:  # rss
+                field_names = list(field_selectors.keys())
+                fetcher.add_source(url=url, fields=field_names)
 
-        # If no follow field, return data as-is
-        if not follow_field:
-            return data
-
-        # Follow links recursively
-        field_name = follow_field['name']
-        selector = follow_field['selector']
-
-        # Extract links based on fetch type
-        if fetch_type == 'rss':
-            # RSS returns a list of items, extract the selector field from each
-            links = []
-            for item in data:
-                if selector in item:
-                    links.append(item[selector])
-        else:
-            # HTML returns a dict with the field containing a list of links
-            links = data.get(field_name, [])
-
-        if not links:
-            logger.warning(f"No links found for field '{field_name}' at {location}")
-            return {field_name: []}
-
-        # Make links absolute
-        absolute_links = []
-        for link in links:
-            if not link.startswith('http'):
-                base = base_url or location
-                absolute_links.append(urljoin(base, link))
-            else:
-                absolute_links.append(link)
-
-        # Get follow configuration and recursively fetch
-        follow_config = follow_field['follow_config']
-        follow_type = follow_config['type']
-        follow_fields = follow_config['fields']
-
-        followed_data = []
-        for link in absolute_links:
-            try:
-                result = self.run_fetchers(link, follow_type, follow_fields, base_url=location)
-                if result:
-                    followed_data.append(result)
-            except Exception as e:
-                logger.error(f"Failed to fetch {link}: {e}")
-
-        return {field_name: followed_data}
+        # Execute batch and return results
+        return fetcher.parse(mthred=self.mthred)
 
     def run(self) -> Dict[str, Any]:
         """Execute the dispatcher and fetch all configured sources.
@@ -145,20 +93,79 @@ class Dispatcher:
         Returns:
             Dictionary mapping source names to their extracted data
         """
-        results = {}
+        html_jobs = []
+        rss_jobs = []
+        source_info = []  # (name, url, type, follow_field, job_index_by_type)
 
+        # A) Package jobs by type
         for source_config in self.config['sources']:
             name = source_config['name']
-            location = source_config['location']
+            url = source_config['location']
             source_type = source_config['type']
             fields = source_config['fields']
 
-            logger.info(f"Processing source '{name}' from {location}")
+            # Find follow field
+            follow_field = next((field for field in fields if field.get('follow')), None)
 
-            try:
-                results[name] = self.run_fetchers(location, source_type, fields)
-            except Exception as e:
-                logger.error(f"Failed to process source '{name}': {e}")
-                results[name] = {}
+            # Package job for this source
+            jobs = self._package_jobs([url], fields, source_type)
 
-        return results
+            # Track which index this job will have in the results
+            if source_type == 'html':
+                job_index = len(html_jobs)
+                html_jobs.extend(jobs)
+            else:
+                job_index = len(rss_jobs)
+                rss_jobs.extend(jobs)
+
+            source_info.append((name, url, source_type, follow_field, job_index))
+
+        # B) Execute all jobs by type
+        html_results = self._execute_jobs(html_jobs, 'html')
+        rss_results = self._execute_jobs(rss_jobs, 'rss')
+
+        # Process results and handle follow fields
+        final_results = {}
+
+        for name, url, source_type, follow_field, job_index in source_info:
+            # Get data by index
+            if source_type == 'html':
+                data = html_results[job_index]
+            else:
+                data = rss_results[job_index]
+
+            # No follow? Return data as-is
+            if not follow_field:
+                final_results[name] = data
+                continue
+
+            # 2) Get links from data
+            field_name = follow_field['name']
+            selector = follow_field['selector']
+
+            if source_type == 'rss':
+                links = [item[selector] for item in data if selector in item]
+            else:  # html
+                links = data.get(field_name, [])
+
+            if not links:
+                final_results[name] = {field_name: []}
+                continue
+
+            # Make links absolute
+            absolute_links = [urljoin(url, link) if not link.startswith('http') else link for link in links]
+
+            # 3) Package follow jobs
+            follow_config = follow_field['follow_config']
+            follow_type = follow_config['type']
+            follow_fields = follow_config['fields']
+
+            follow_jobs = self._package_jobs(absolute_links, follow_fields, follow_type)
+
+            # 4) Execute follow jobs
+            follow_results = self._execute_jobs(follow_jobs, follow_type)
+
+            # Results are already in order matching absolute_links
+            final_results[name] = {field_name: follow_results}
+
+        return final_results
