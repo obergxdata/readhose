@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Test Blog</title>
+    <link>http://localhost:8765/</link>
+    <description>A test RSS feed for testing purposes</description>
+    <language>en-us</language>
+    <pubDate>Mon, 15 Jan 2024 12:00:00 GMT</pubDate>
+
+    <item>
+      <title>First Article</title>
+      <link>http://localhost:8765/link.html</link>
+      <description>This is the first article in the feed</description>
+      <pubDate>Mon, 15 Jan 2024 10:00:00 GMT</pubDate>
+      <author>John Doe</author>
+    </item>
+
+    <item>
+      <title>Second Article</title>
+      <link>http://localhost:8765/link.html</link>
+      <description>This is the second article in the feed</description>
+      <pubDate>Mon, 15 Jan 2024 11:00:00 GMT</pubDate>
+      <author>Jane Smith</author>
+    </item>
+
+    <item>
+      <title>Third Article</title>
+      <link>http://localhost:8765/home.html</link>
+      <description>This is the third article in the feed</description>
+      <pubDate>Mon, 15 Jan 2024 12:00:00 GMT</pubDate>
+      <author>Bob Johnson</author>
+    </item>
+  </channel>
+</rss>

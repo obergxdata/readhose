@@ -29,8 +29,15 @@ class HTTPFetch:
         Args:
             url: The URL to fetch
             fields: Dictionary mapping field names to XPath expressions
-                   Example: {"title": "//title/text()", "heading": "//h1/text()"}
+                   Example: {"title": "//title/text()", "items": "//li/text()"}
+
+                   Note: XPath results are always returned as lists for consistency.
+                   - Single match: ["value"]
+                   - Multiple matches: ["value1", "value2", "value3"]
+                   - No matches: field is omitted from results
+
                    If None or empty dict, returns the full HTML content as a string
+                   under the "html" key.
         """
         self.sources.append({
             'url': url,
@@ -74,21 +81,20 @@ class HTTPFetch:
             try:
                 elements = tree.xpath(xpath_expr)
                 if elements:
-                    # If xpath returns a list, take the first element
-                    if isinstance(elements, list) and len(elements) > 0:
-                        value = elements[0]
-                    else:
-                        value = elements
+                    # Ensure elements is a list
+                    if not isinstance(elements, list):
+                        elements = [elements]
 
-                    # Check if we got an Element object instead of text/attribute
-                    if isinstance(value, (html.HtmlElement, etree._Element)):
+                    # Check if list contains Element objects (should use /text() or /@attr)
+                    if len(elements) > 0 and isinstance(elements[0], (html.HtmlElement, etree._Element)):
                         logger.warning(
                             f"XPath '{xpath_expr}' for field '{field_name}' returned an Element object instead of text/attribute. "
                             f"Consider using '/text()' or '/@attribute' in your XPath. Skipping field."
                         )
                         continue
 
-                    result[field_name] = value
+                    # Always return a list for consistency
+                    result[field_name] = elements
                 else:
                     logger.warning(f"XPath '{xpath_expr}' for field '{field_name}' returned no results from '{url}'")
             except Exception as e:

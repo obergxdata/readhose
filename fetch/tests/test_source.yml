@@ -1,0 +1,52 @@
+sources:
+  - name: "single_page"
+    location: "http://localhost:8765/link.html"
+    type: "html"
+    fields:
+      - name: "title"
+        selector: "//h1/text()"
+      - name: "author"
+        selector: "//span[@class='author']/text()"
+      - name: "paragraphs"
+        selector: "//div[@class='content']/p/text()"
+
+  - name: "listing_page"
+    location: "http://localhost:8765/home.html"
+    type: "html"
+    fields:
+      - name: "links"
+        selector: "//ul[@class='links']/li/a/@href"
+        follow: true
+        follow_config:
+          type: "html"
+          fields:
+            - name: "title"
+              selector: "//h1/text()"
+            - name: "author"
+              selector: "//span[@class='author']/text()"
+
+  - name: "rss_feed"
+    location: "http://localhost:8765/feed.xml"
+    type: "rss"
+    fields:
+      - name: "title"
+        selector: "title"
+      - name: "description"
+        selector: "description"
+      - name: "author"
+        selector: "author"
+
+  - name: "rss_with_follow"
+    location: "http://localhost:8765/feed.xml"
+    type: "rss"
+    fields:
+      - name: "link"
+        selector: "link"
+        follow: true
+        follow_config:
+          type: "html"
+          fields:
+            - name: "title"
+              selector: "//h1/text()"
+            - name: "author"
+              selector: "//span[@class='author']/text()"
