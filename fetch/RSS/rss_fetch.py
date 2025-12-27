@@ -2,7 +2,7 @@ import feedparser
 import logging
 import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +22,30 @@ class RSSFetch:
         self.sources: List[Dict[str, Any]] = []
         self.max_workers: Optional[int] = max_workers
         self.timeout: float = timeout
+        self._source_counter: int = 0
 
-    def add_source(self, url: str, fields: List[str]) -> None:
-        """Add an RSS feed source with specified fields to extract."""
+    def add_source(self, url: str, fields: Optional[Dict[str, str]] = None, name: Optional[str] = None) -> None:
+        """Add an RSS feed source with field mappings for extraction.
+
+        Args:
+            url: The RSS feed URL to fetch
+            fields: Dictionary mapping custom field names to RSS entry attributes
+                   Example: {"article_title": "title", "article_link": "link"}
+
+                   The keys are the custom field names you want in the output,
+                   and the values are the RSS entry attribute names to extract.
+
+                   If None or empty dict, returns all available fields from each entry.
+            name: Optional name for this source. If not provided, auto-generates as "source_0", "source_1", etc.
+        """
+        if name is None:
+            name = f"source_{self._source_counter}"
+            self._source_counter += 1
+
         self.sources.append({
             'url': url,
-            'fields': fields
+            'fields': fields if fields is not None else {},
+            'name': name
         })
 
     def _fetch_feed(self, source: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -58,61 +76,71 @@ class RSSFetch:
             logger.warning(f"RSS feed from '{url}' contains no entries")
             return []
 
+        # If no fields specified, return all entry attributes
+        if not fields:
+            results = []
+            for entry in feed.entries:
+                # Convert entry to dict with all available attributes
+                item = dict(entry)
+                if item:
+                    results.append(item)
+            return results
+
         results = []
         missing_fields_logged = set()
 
         for entry in feed.entries:
             item = {}
-            for field in fields:
-                if hasattr(entry, field):
-                    item[field] = getattr(entry, field)
-                elif field in entry:
-                    item[field] = entry[field]
+            for custom_name, rss_field in fields.items():
+                if hasattr(entry, rss_field):
+                    item[custom_name] = getattr(entry, rss_field)
+                elif rss_field in entry:
+                    item[custom_name] = entry[rss_field]
                 else:
                     # Log missing field once per feed (not for every entry)
-                    if field not in missing_fields_logged:
-                        logger.warning(f"Field '{field}' not found in RSS feed from '{url}'")
-                        missing_fields_logged.add(field)
+                    if rss_field not in missing_fields_logged:
+                        logger.warning(f"RSS field '{rss_field}' not found in RSS feed from '{url}'")
+                        missing_fields_logged.add(rss_field)
 
             if item:
                 results.append(item)
 
         return results
 
-    def parse(self, mthred: bool = False) -> List[List[Dict[str, Any]]]:
+    def parse(self, mthred: bool = False) -> Dict[str, List[Dict[str, Any]]]:
         """Parse all added RSS feeds.
 
         Args:
             mthred: If True, use multi-threading to fetch feeds in parallel.
 
         Returns:
-            List of lists, where each sublist contains dictionaries with extracted fields from one feed.
-            Access pattern: data[source_index][item_index]["field_name"]
+            Dictionary mapping source names to lists of extracted items.
+            Access pattern: data[source_name][item_index]["field_name"]
         """
         if mthred:
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                futures = {executor.submit(self._fetch_feed, source): idx
-                          for idx, source in enumerate(self.sources)}
+                futures = {executor.submit(self._fetch_feed, source): source['name']
+                          for source in self.sources}
 
                 results_dict = {}
                 for future in as_completed(futures):
-                    idx = futures[future]
+                    source_name = futures[future]
                     try:
-                        results_dict[idx] = future.result()
+                        results_dict[source_name] = future.result()
                     except Exception as e:
-                        source_url = self.sources[idx]['url']
+                        # Find source by name for error logging
+                        source = next((s for s in self.sources if s['name'] == source_name), None)
+                        source_url = source['url'] if source else 'unknown'
                         logger.error(f"Exception while fetching '{source_url}': {e}")
-                        results_dict[idx] = []
-
-                all_results = [results_dict[i] for i in range(len(self.sources))]
+                        results_dict[source_name] = []
         else:
-            all_results = []
+            results_dict = {}
             for source in self.sources:
                 try:
                     results = self._fetch_feed(source)
-                    all_results.append(results)
+                    results_dict[source['name']] = results
                 except Exception as e:
                     logger.error(f"Exception while fetching '{source['url']}': {e}")
-                    all_results.append([])
+                    results_dict[source['name']] = []
 
-        return all_results
+        return results_dict

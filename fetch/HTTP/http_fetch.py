@@ -8,7 +8,9 @@ logger = logging.getLogger(__name__)
 
 
 class HTTPFetch:
-    def __init__(self, max_workers: Optional[int] = None, timeout: float = 30.0) -> None:
+    def __init__(
+        self, max_workers: Optional[int] = None, timeout: float = 30.0
+    ) -> None:
         """Initialize HTTPFetch.
 
         Args:
@@ -22,8 +24,9 @@ class HTTPFetch:
         self.sources: List[Dict[str, Any]] = []
         self.max_workers: Optional[int] = max_workers
         self.timeout: float = timeout
+        self._source_counter: int = 0
 
-    def add_source(self, url: str, fields: Optional[Dict[str, str]] = None) -> None:
+    def add_source(self, url: str, fields: Optional[Dict[str, str]] = None, name: Optional[str] = None) -> None:
         """Add an HTTP source with XPath expressions for field extraction.
 
         Args:
@@ -38,11 +41,15 @@ class HTTPFetch:
 
                    If None or empty dict, returns the full HTML content as a string
                    under the "html" key.
+            name: Optional name for this source. If not provided, auto-generates as "source_0", "source_1", etc.
         """
-        self.sources.append({
-            'url': url,
-            'fields': fields if fields is not None else {}
-        })
+        if name is None:
+            name = f"source_{self._source_counter}"
+            self._source_counter += 1
+
+        self.sources.append(
+            {"url": url, "fields": fields if fields is not None else {}, "name": name}
+        )
 
     def _fetch_page(self, source: Dict[str, Any]) -> Dict[str, Any]:
         """Fetch and parse a single HTML page using XPath.
@@ -53,8 +60,8 @@ class HTTPFetch:
         Returns:
             Dictionary with extracted field values, or {"html": "..."} if no fields specified
         """
-        url = source['url']
-        fields = source['fields']
+        url = source["url"]
+        fields = source["fields"]
 
         try:
             response = requests.get(url, timeout=self.timeout)
@@ -86,7 +93,9 @@ class HTTPFetch:
                         elements = [elements]
 
                     # Check if list contains Element objects (should use /text() or /@attr)
-                    if len(elements) > 0 and isinstance(elements[0], (html.HtmlElement, etree._Element)):
+                    if len(elements) > 0 and isinstance(
+                        elements[0], (html.HtmlElement, etree._Element)
+                    ):
                         logger.warning(
                             f"XPath '{xpath_expr}' for field '{field_name}' returned an Element object instead of text/attribute. "
                             f"Consider using '/text()' or '/@attribute' in your XPath. Skipping field."
@@ -96,46 +105,50 @@ class HTTPFetch:
                     # Always return a list for consistency
                     result[field_name] = elements
                 else:
-                    logger.warning(f"XPath '{xpath_expr}' for field '{field_name}' returned no results from '{url}'")
+                    logger.warning(
+                        f"XPath '{xpath_expr}' for field '{field_name}' returned no results from '{url}'"
+                    )
             except Exception as e:
                 logger.error(f"XPath error for field '{field_name}' on '{url}': {e}")
 
         return result
 
-    def parse(self, mthred: bool = False) -> List[Dict[str, Any]]:
+    def parse(self, mthred: bool = False) -> Dict[str, Dict[str, Any]]:
         """Parse all added HTTP sources.
 
         Args:
             mthred: If True, use multi-threading to fetch pages in parallel.
 
         Returns:
-            List of dictionaries containing the extracted fields from each source.
-            Access pattern: data[source_index]["field_name"]
+            Dictionary mapping source names to dictionaries with extracted fields.
+            Access pattern: data[source_name]["field_name"]
         """
         if mthred:
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                futures = {executor.submit(self._fetch_page, source): idx
-                          for idx, source in enumerate(self.sources)}
+                futures = {
+                    executor.submit(self._fetch_page, source): source["name"]
+                    for source in self.sources
+                }
 
                 results_dict = {}
                 for future in as_completed(futures):
-                    idx = futures[future]
+                    source_name = futures[future]
                     try:
-                        results_dict[idx] = future.result()
+                        results_dict[source_name] = future.result()
                     except Exception as e:
-                        source_url = self.sources[idx]['url']
+                        # Find source by name for error logging
+                        source = next((s for s in self.sources if s["name"] == source_name), None)
+                        source_url = source["url"] if source else "unknown"
                         logger.error(f"Exception while fetching '{source_url}': {e}")
-                        results_dict[idx] = {}
-
-                all_results = [results_dict[i] for i in range(len(self.sources))]
+                        results_dict[source_name] = {}
         else:
-            all_results = []
+            results_dict = {}
             for source in self.sources:
                 try:
                     result = self._fetch_page(source)
-                    all_results.append(result)
+                    results_dict[source["name"]] = result
                 except Exception as e:
                     logger.error(f"Exception while fetching '{source['url']}': {e}")
-                    all_results.append({})
+                    results_dict[source["name"]] = {}
 
-        return all_results
+        return results_dict
